@@ -4,6 +4,7 @@ import json  # json for parse the rtm_read() data
 import sys
 import random
 
+# create listOfMoves to prevent duplicate moves
 listOfMoves = []
 listOfMoves.append("")
 listOfMoves.append(" ")
@@ -13,7 +14,8 @@ with open('token.json') as api_key:
     api_key = json.load(api_key)
     token = api_key["token"]
 
-sc = SlackClient(token)  # create an instance of a slack client
+# create an instance of a slack client
+sc = SlackClient(token)
 
 # send a test messgae
 sc.api_call("api.test")
@@ -22,32 +24,53 @@ sc.api_call("channels.info", channel="1234567890")
 
 # draw new board and send
 def drawBoard(board):
-    boardString = "GAMEBOARD\n"
-    # This function prints out the board that it was passed. Returns None.
-    HLINE = '    ----------------------------------------------------\n'
-    VLINE = '    |       |       |       |       |       |       |       |     \
-      |\n'
+    boardString = "               GAMEBOARD\n"
+    # This function prints out the board that it was passed. Returns None
+    HLINE = '  +---+---+---+---+---+---+---+---+\n'
+    VLINE = '  |   |   |   |   |   |   |   |   |\n'
 
-    boardString += ('          1        2         3         4         5         6        7         8\n')
+    boardString += '    1   2   3   4   5   6   7   8\n'
     boardString += HLINE
     for y in range(8):
-        boardString += str(y+1)
+        boardString += (str(y+1) + ' ')
         for x in range(8):
-            boardString += '|   ' + str(board[x][y]) + '   '
+            boardString += '| ' + str(board[x][y]) + ' '
         boardString += '|\n' + HLINE
-
     # Send the board string.
     sc.api_call(
-        "chat.postMessage", channel="#general", text=boardString,
+        "chat.postMessage", channel="#general", text='```'+ boardString+'```',
         username='gamebot', icon_emoji=':robot_face:'
     )
 
+def getSmartComputerMove(board, computerTile, playerTile):
+    # Given a board and the computer's tile, determine where to
+    # move and return that move as a [x, y] list.
+    possibleMoves = getValidMoves(board, computerTile)
+    # randomize the order of the possible moves
+    random.shuffle(possibleMoves)
+    # always go for a corner if available.
+    for x, y in possibleMoves:
+        if isOnCorner(x, y):
+            return [x, y]
+    # Go through all the possible moves and remember the best scoring move
+    bestScore = -1
+    bestMove = [-1,-1]
+    for x, y in possibleMoves:
+        dupeBoard = getBoardCopy(board)
+        makeMove(dupeBoard, computerTile, x, y)
+        nextMove = getComputerMove(dupeBoard, playerTile)
+        makeMove(dupeBoard, playerTile, x, y)
+        score = getScoreOfBoard(dupeBoard)[computerTile]
+        if score > bestScore:
+            bestMove = [x, y]
+            bestScore = score
+    return bestMove
 
 def resetBoard(board):
     # Blanks out the board it is passed, except for the original starting position.
     for x in range(8):
         for y in range(8):
-            board[x][y] = '    '
+            board[x][y] = ' '
 
     # Starting pieces:
     board[3][3] = 'X'
@@ -68,8 +91,9 @@ def getNewBoard():
 def isValidMove(board, tile, xstart, ystart):
     # Returns False if the player's move on space xstart, ystart is invalid.
     # If it is a valid move, returns a list of spaces that would become the player's if they made a move here.
-    if board[xstart][ystart] != '    ' or not isOnBoard(xstart, ystart):
-        print("not empty or not on board")
+    if board[xstart][ystart] != ' ':
+        return False
+    elif not isOnBoard(xstart, ystart):
         return False
 
     board[xstart][ystart] = tile  # temporarily set the tile on the board.
@@ -150,15 +174,6 @@ def getScoreOfBoard(board):
     return {'X':xscore, 'O':oscore}
 
 
-def enterPlayerTile():
-    # Lets the player type which tile they want to be.
-    sc.api_call(
-        "chat.postMessage", channel="#general", text='You are player X.',
-        username='gamebot', icon_emoji=':robot_face:'
-    )
-    return ['X', 'O']
-
-
 def whoGoesFirst():
     # Randomly choose the player who goes first.
     if random.randint(0, 1) == 0:
@@ -183,18 +198,15 @@ def playAgain():
 def makeMove(board, tile, xstart, ystart):
     # Place the tile on the board at xstart, ystart, and flip any of the opponent's pieces.
     # Returns False if this is an invalid move, True if it is valid.
-    print("Makemove")
+
     tilesToFlip = isValidMove(board, tile, xstart, ystart)
-    print("afterFlip")
 
     if tilesToFlip is False:
-        print("FALSE")
         return False
 
     board[xstart][ystart] = tile
     for x, y in tilesToFlip:
         board[x][y] = tile
-        print("Repeatedtile" + x + y)
     return True
 
 
@@ -220,8 +232,10 @@ def getPlayerMove(board, playerTile):
         "chat.postMessage", channel="#general", text='Enter your move, or type quit to end the game, or hints to turn off/on hints.',
         username='gamebot', icon_emoji=':robot_face:'
     )
+
     # Returns the move as [x, y] (or returns the strings 'hints' or 'quit')
     DIGITS1TO8 = '1 2 3 4 5 6 7 8'.split()
+    
     while True:
 
         # Get the player move from slack.
@@ -230,7 +244,6 @@ def getPlayerMove(board, playerTile):
 
         if move not in listOfMoves and len(move) <= 5:
             listOfMoves.append(move)
-            print ("move: " + move)
 
             if move == 'quit':
                 return 'quit'
@@ -240,9 +253,7 @@ def getPlayerMove(board, playerTile):
             if len(move) == 2 and move[0] in DIGITS1TO8 and move[1] in DIGITS1TO8:
                 x = int(move[0]) - 1
                 y = int(move[1]) - 1
-                print('calling from here')
                 if isValidMove(board, playerTile, x, y) == False:
-                    print("MOVE IS FALSE")
                     continue
                 else:
                     break
@@ -302,71 +313,74 @@ def showPoints(playerTile, computerTile, mainBoard):
 # PLAY GAME
 def playReversi():
     while True:
-        outputString = ""
 
         # Reset the board and game.
         mainBoard = getNewBoard()
         resetBoard(mainBoard)
-        playerTile, computerTile = enterPlayerTile()
+        playerTile = 'X'
+        computerTile = 'O'
         showHints = False
+
+        # choose who goes first
         turn = whoGoesFirst()
         output = 'The ' + turn + ' will go first.'
-
         sc.api_call(
             "chat.postMessage", channel="#general", text=output,
             username='gamebot', icon_emoji=':robot_face:'
         )
 
         while True:
+            # Player's turn
             if turn == 'player':
-                # Player's turn.
 
+                # drawBoard(mainBoard)
+                # showPoints(playerTile, computerTile, mainBoard)
+                # x, y = getComputerMove(mainBoard, playerTile)
+                # makeMove(mainBoard, playerTile, x, y)
+
+                # display hints or not
                 if showHints:
                     validMovesBoard = getBoardWithValidMoves(mainBoard, playerTile)
                     drawBoard(validMovesBoard)
                 else:
                     drawBoard(mainBoard)
+
                 showPoints(playerTile, computerTile, mainBoard)
+
+                # get player move
                 move = getPlayerMove(mainBoard, playerTile)
                 if move == 'quit':
                     sc.api_call(
                         "chat.postMessage", channel="#general", text = 'Thanks for playing!',
                         username='gamebot', icon_emoji=':robot_face:'
                     )
-                    sys.exit() # terminate the program
+                    sys.exit()
                 elif move == 'hints':
                     showHints = not showHints
                     continue
                 else:
-                    print("ENTERED ELSE LOOP FOR MAKEMOVE")
                     makeMove(mainBoard, playerTile, move[0], move[1])
 
+                # end game or change to computer's turn
                 if getValidMoves(mainBoard, computerTile) == []:
                     break
                 else:
                     turn = 'computer'
 
+            # Computer's turn
             else:
-                # Computer's turn.
                 drawBoard(mainBoard)
                 showPoints(playerTile, computerTile, mainBoard)
-                sc.api_call(
-                    "chat.postMessage", channel="#general", text = output,
-                    username='gamebot', icon_emoji=':robot_face:'
-                )
-                sc.api_call(
-                    "typing", channel="general", username = 'gamebot'
-                )
-                #input('Press Enter to see the computer\'s move.')
-                x, y = getComputerMove(mainBoard, computerTile)
+                x, y = getSmartComputerMove(mainBoard, computerTile, playerTile)
                 makeMove(mainBoard, computerTile, x, y)
 
+                # end game or change to player's turn
                 if getValidMoves(mainBoard, playerTile) == []:
                     break
                 else:
                     turn = 'player'
 
-        # Display the final score.
+        # Display the final scores
         drawBoard(mainBoard)
         scores = getScoreOfBoard(mainBoard)
         output = 'X scored ' + str(scores['X']) + ' points. O scored ' + str(scores['O']) + ' points.'
@@ -374,18 +388,21 @@ def playReversi():
             "chat.postMessage", channel="#general", text = output,
             username='gamebot', icon_emoji=':robot_face:'
         )
+        # Player won 
         if scores[playerTile] > scores[computerTile]:
-            output = 'You beat the computer by ' + str(scores[playerTile] - scores[computerTile]) + 'points! Congratulations!'
+            output = 'You beat the computer by ' + str(scores[playerTile] - scores[computerTile]) + ' points! Congratulations!'
             sc.api_call(
                 "chat.postMessage", channel="#general", text = output,
                 username='gamebot', icon_emoji=':robot_face:'
             )
+        # Computer won
         elif scores[playerTile] < scores[computerTile]:
-            output = 'You beat the computer by ' + str(scores[computerTile] - scores[playerTile]) + 'points! Congratulations!'
+            output = 'The computer beat you by ' + str(scores[computerTile] - scores[playerTile]) + ' points.'
             sc.api_call(
                 "chat.postMessage", channel="#general", text = output,
                 username='gamebot', icon_emoji=':robot_face:'
             )
+        # Tie
         else:
             sc.api_call(
                 "chat.postMessage", channel="#general", text = 'The game was a tie!',
@@ -399,9 +416,7 @@ def playReversi():
 def print_menu():
     '''print menu to channel'''
 
-    menu = "Hi and welcome to Slackbot Games! \n"
-    menu += "Pick the game you want to play: \n"
-    menu += "1. Reversi \n"
+    menu = "Hi and welcome to Slackbot Games! The first game is Reversi! \n"
 
     sc.api_call(
         "chat.postMessage", channel="#general", text = menu,
@@ -412,7 +427,7 @@ def print_menu():
 def main():
     # print the menu
     print_menu()
-
+    # play reversi
     playReversi()
 
 main()
